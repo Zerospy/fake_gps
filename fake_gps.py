@@ -2,9 +2,17 @@ from pymavlink import mavutil
 import time
 import math
 
-# Conexión MAVLink (ajusta si usas otro puerto)
-master = mavutil.mavlink_connection('udp:10.0.2.100:14560')
-master.wait_heartbeat()
+
+# Recibir MAVLink que RPanion te reenvía
+in_mav = mavutil.mavlink_connection('udpin:0.0.0.0:14560')
+
+# Enviar GPS_INPUT al bus MAVLink de RPanion
+out_mav = mavutil.mavlink_connection('udpout:127.0.0.1:14550')
+
+print("fake_gps: RX on 14560, TX to 14550")
+
+# (Opcional) espera heartbeat desde el stream que llega por 14560
+in_mav.wait_heartbeat(timeout=10)
 
 # Posición inicial (puede ser cualquiera)
 lat = -33.0472      # Santiago ejemplo
@@ -15,7 +23,7 @@ speed = 0.00001     # Ajusta sensibilidad
 heading = 0
 
 while True:
-    msg = master.recv_match(type='RC_CHANNELS', blocking=True)
+    msg = in_mav.recv_match(type='RC_CHANNELS', blocking=False)
     if not msg:
         continue
 
@@ -29,7 +37,7 @@ while True:
     lat += v * math.cos(heading)
     lon += v * math.sin(heading)
 
-    master.mav.gps_input_send(
+    in_mav.gps_input_send(
         int(time.time() * 1e6),
         0,
         0,

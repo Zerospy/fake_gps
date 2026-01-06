@@ -3,7 +3,7 @@ import time
 import math
 
 # Conexión MAVLink (ajusta si usas otro puerto)
-master = mavutil.mavlink_connection('udp:127.0.0.1:14550')
+master = mavutil.mavlink_connection('udp:10.0.2.100:14550')
 master.wait_heartbeat()
 
 # Posición inicial (puede ser cualquiera)

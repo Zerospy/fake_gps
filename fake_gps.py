@@ -15,8 +15,8 @@ print("fake_gps: RX on 14560, TX to 14550")
 in_mav.wait_heartbeat(timeout=10)
 
 # Posición inicial (puede ser cualquiera) -33.031123, -71.621050
-lat = -33.031123      # Santiago ejemplo
-lon = -71.621050
+lat = -33.03112      # Santiago ejemplo
+lon = -71.62105
 alt = 10
 
 speed = 0.00001     # Ajusta sensibilidad
@@ -41,22 +41,62 @@ while True:
     # mavutil.mavlink_connection no expone métodos directos como
     # `gps_input_send`, hay que usar la propiedad `mav`.
     try:
+        # Preparar campos en el orden correcto según GPS_INPUT (mavlink):
+        # (time_usec, gps_id, ignore_flags, time_week_ms, time_week, fix_type,
+        #  lat, lon, alt, hdop, vdop, vn, ve, vd,
+        #  speed_accuracy, horiz_accuracy, vert_accuracy, satellites_visible, yaw)
+
+        time_usec = int(time.time() * 1e6)
+        gps_id = 0
+        ignore_flags = 0
+        time_week_ms = 0
+        time_week = 0
+        fix_type = 3  # 3D fix
+
+        # Lat/Lon deben ir en int32 degE7
+        lat_e7 = int(lat * 1e7)
+        lon_e7 = int(lon * 1e7)
+
+        # Alt es float (m)
+        hdop = 0.1
+        vdop = 0.1
+
+        # Velocidades en m/s (north, east, down). Aquí aproximamos 0.
+        vn = 0.0
+        ve = 0.0
+        vd = 0.0
+
+        speed_accuracy = 0.1
+        horiz_accuracy = 1.0
+        vert_accuracy = 1.0
+
+        satellites_visible = int(max(0, min(255, 10)))
+
+        # Yaw en centigrados (cdeg, uint16): 0..36000
+        yaw_cdeg = int((heading * 180.0 / math.pi) * 100) % 36000
+
+        print(f"Enviando GPS_INPUT: lat={lat_e7}, lon={lon_e7}, alt={alt}, sats={satellites_visible}, yaw={yaw_cdeg}")
+
         out_mav.mav.gps_input_send(
-            int(time.time() * 1e6),
-            0,
-            0,
-            0,
-            0,
-            int(lat * 1e7),
-            int(lon * 1e7),
-            alt,
-            1.0, 1.0,
-            0.1, 0.1,
-            0,
-            10,
-            # Parámetros adicionales requeridos por la firma:
-            # speed_accuracy, horiz_accuracy, vert_accuracy, satellites_visible
-            0.1, 1.0, 1.0, 10
+            time_usec,
+            gps_id,
+            ignore_flags,
+            time_week_ms,
+            time_week,
+            fix_type,
+            lat_e7,
+            lon_e7,
+            float(alt),
+            float(hdop),
+            float(vdop),
+            float(vn),
+            float(ve),
+            float(vd),
+            float(speed_accuracy),
+            float(horiz_accuracy),
+            float(vert_accuracy),
+            int(satellites_visible),
+            int(yaw_cdeg),
         )
     except Exception as e:
         # Evitar que el script termine si el envio falla; imprimir el error

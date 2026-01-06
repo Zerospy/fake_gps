@@ -14,9 +14,9 @@ print("fake_gps: RX on 14560, TX to 14550")
 # (Opcional) espera heartbeat desde el stream que llega por 14560
 in_mav.wait_heartbeat(timeout=10)
 
-# Posición inicial (puede ser cualquiera)
-lat = -33.0472      # Santiago ejemplo
-lon = -71.6127
+# Posición inicial (puede ser cualquiera) -33.031123, -71.621050
+lat = -33.031123      # Santiago ejemplo
+lon = -71.621050
 alt = 10
 
 speed = 0.00001     # Ajusta sensibilidad
@@ -37,19 +37,27 @@ while True:
     lat += v * math.cos(heading)
     lon += v * math.sin(heading)
 
-    in_mav.gps_input_send(
-        int(time.time() * 1e6),
-        0,
-        0,
-        0,
-        0,
-        int(lat * 1e7),
-        int(lon * 1e7),
-        alt,
-        1.0, 1.0,
-        0.1, 0.1,
-        0,
-        10
-    )
+    # Enviar por el socket de salida (out_mav). El objeto devuelto por
+    # mavutil.mavlink_connection no expone métodos directos como
+    # `gps_input_send`, hay que usar la propiedad `mav`.
+    try:
+        out_mav.mav.gps_input_send(
+            int(time.time() * 1e6),
+            0,
+            0,
+            0,
+            0,
+            int(lat * 1e7),
+            int(lon * 1e7),
+            alt,
+            1.0, 1.0,
+            0.1, 0.1,
+            0,
+            10
+        )
+    except Exception as e:
+        # Evitar que el script termine si el envio falla; imprimir el error
+        # para diagnóstico.
+        print(f"Error enviando GPS_INPUT: {e}")
 
     time.sleep(0.2)

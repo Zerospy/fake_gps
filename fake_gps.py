@@ -53,7 +53,10 @@ while True:
             1.0, 1.0,
             0.1, 0.1,
             0,
-            10
+            10,
+            # Parámetros adicionales requeridos por la firma:
+            # speed_accuracy, horiz_accuracy, vert_accuracy, satellites_visible
+            0.1, 1.0, 1.0, 10
         )
     except Exception as e:
         # Evitar que el script termine si el envio falla; imprimir el error

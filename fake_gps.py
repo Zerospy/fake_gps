@@ -3,10 +3,10 @@ import time
 import math
 
 # RX: RC_CHANNELS (desde FC via rpanion/router)
-in_mav = mavutil.mavlink_connection('udpin:0.0.0.0:14560')
+in_mav = mavutil.mavlink_connection('tcpin:0.0.0.0:14560')
 
 # TX: hacia el bus MAVLink que llega al FC (si corres esto en la RPi, localhost ok)
-out_mav = mavutil.mavlink_connection('udpout:127.0.0.1:14550')
+out_mav = mavutil.mavlink_connection('tcpout:127.0.0.1:14550')
 
 print("fake_gps: RX on 14560, TX to 14550")
 

@@ -10,7 +10,9 @@ out_mav = mavutil.mavlink_connection('udpout:127.0.0.1:14550')
 
 print("fake_gps: RX on 14560, TX to 14550")
 
-in_mav.wait_heartbeat(timeout=10)
+hb0 = in_mav.wait_heartbeat(timeout=10)
+if not hb0:
+    print("WARN: no HEARTBEAT on 14560 after 10s; continuing without mode info")
 
 # Posición inicial (Valparaíso aprox)
 lat = -33.03112
@@ -20,10 +22,14 @@ alt = 10.0
 # Estado
 heading_rad = 0.0  # rad
 last_t = time.time()
+last_rc_time = None
+last_throttle = 1500
+last_yaw = 1500
 
 # Ajustes (tú los calibras)
 MAX_SPEED_MPS = 3.0        # velocidad máxima (m/s) con throttle al 2000
 MAX_TURN_RATE_DPS = 45.0   # giro máximo (deg/s) con yaw al 2000
+RC_STALE_S = 1.0           # si no hay RC reciente, usa neutral
 
 R_EARTH = 6378137.0  # m
 
@@ -46,12 +52,17 @@ while True:
         current_mode = mavutil.mode_string_v10(hb)
 
     msg = in_mav.recv_match(type='RC_CHANNELS', blocking=False)
-    if not msg:
-        time.sleep(0.02)
-        continue
+    if msg:
+        last_throttle = msg.chan3_raw  # 1000-2000 típico
+        last_yaw = msg.chan4_raw       # 1000-2000 típico
+        last_rc_time = now
 
-    throttle = msg.chan3_raw  # 1000-2000 típico
-    yaw = msg.chan4_raw       # 1000-2000 típico
+    if not last_rc_time or (now - last_rc_time) > RC_STALE_S:
+        throttle = 1500
+        yaw = 1500
+    else:
+        throttle = last_throttle
+        yaw = last_yaw
 
     # Normaliza [-1..+1]
     thr_n = clamp((throttle - 1500) / 500.0, -1.0, 1.0)

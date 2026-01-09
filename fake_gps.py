@@ -30,12 +30,20 @@ R_EARTH = 6378137.0  # m
 def clamp(x, a, b):
     return max(a, min(b, x))
 
+
+current_mode = None
+
+
 while True:
     now = time.time()
     dt = now - last_t
     last_t = now
     if dt <= 0:
         dt = 0.02
+        
+    hb = in_mav.recv_match(type='HEARTBEAT', blocking=False)
+    if hb:
+        current_mode = mavutil.mode_string_v10(hb)
 
     msg = in_mav.recv_match(type='RC_CHANNELS', blocking=False)
     if not msg:
@@ -50,7 +58,11 @@ while True:
     yaw_n = clamp((yaw - 1500) / 500.0, -1.0, 1.0)
 
     # Velocidad y giro
-    speed_mps = thr_n * MAX_SPEED_MPS
+    if current_mode == "GUIDED":
+        speed_mps = 5.0   # ← VELOCIDAD REAL PARA GUIDED (m/s)
+    else:
+        speed_mps = thr_n * MAX_SPEED_MPS
+
     turn_rate_rps = math.radians(yaw_n * MAX_TURN_RATE_DPS)
 
     # Actualiza heading

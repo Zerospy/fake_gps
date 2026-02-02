@@ -76,6 +76,9 @@ GPS_WEEK_S = 7 * 24 * 60 * 60
 # GPS-UTC offset. Since 2017-01-01 it's 18s; if this changes, update this constant.
 GPS_UTC_LEAP_S = 18
 
+PWM_MIN_VALID = 800
+PWM_MAX_VALID = 2200
+
 def unix_to_gps_week_and_ms(unix_s: float) -> tuple[int, int]:
     gps_s = unix_s - GPS_EPOCH_UNIX_S + GPS_UTC_LEAP_S
     if gps_s < 0:
@@ -101,26 +104,39 @@ while True:
         if mtype == 'HEARTBEAT':
             current_mode = mavutil.mode_string_v10(m)
         elif mtype == 'RC_CHANNELS':
-            last_throttle = m.chan3_raw  # 1000-2000 típico
-            last_yaw = m.chan4_raw       # 1000-2000 típico
-            last_rc_time = now
+            # Algunos links/streams pueden entregar 0 en chan*_raw; trata 0 como "sin dato".
+            thr = getattr(m, "chan3_raw", 0)
+            yaw = getattr(m, "chan4_raw", 0)
+            if PWM_MIN_VALID <= int(thr) <= PWM_MAX_VALID and PWM_MIN_VALID <= int(yaw) <= PWM_MAX_VALID:
+                last_throttle = int(thr)  # 1000-2000 típico
+                last_yaw = int(yaw)       # 1000-2000 típico
+                last_rc_time = now
         elif mtype == 'SERVO_OUTPUT_RAW':
             # Usa los outputs del autopiloto para que en GUIDED/AUTO el "fake GPS" reaccione a waypoints.
             if DRIVE_MODE == "diff":
                 left = getattr(m, f'servo{LEFT_THROTTLE_SERVO_CH}_raw', None)
                 right = getattr(m, f'servo{RIGHT_THROTTLE_SERVO_CH}_raw', None)
-                if left is not None:
+                updated = False
+                if left is not None and PWM_MIN_VALID <= int(left) <= PWM_MAX_VALID:
                     last_left_out = int(left)
-                if right is not None:
+                    updated = True
+                if right is not None and PWM_MIN_VALID <= int(right) <= PWM_MAX_VALID:
                     last_right_out = int(right)
+                    updated = True
+                if updated:
+                    last_servo_time = now
             else:
                 steer = getattr(m, f'servo{STEER_SERVO_CH}_raw', None)
                 thr = getattr(m, f'servo{THROTTLE_SERVO_CH}_raw', None)
-                if steer is not None:
+                updated = False
+                if steer is not None and PWM_MIN_VALID <= int(steer) <= PWM_MAX_VALID:
                     last_yaw_out = int(steer)
-                if thr is not None:
+                    updated = True
+                if thr is not None and PWM_MIN_VALID <= int(thr) <= PWM_MAX_VALID:
                     last_throttle_out = int(thr)
-            last_servo_time = now
+                    updated = True
+                if updated:
+                    last_servo_time = now
 
     # Selecciona la "entrada" para integrar el movimiento:
     # - En GUIDED/AUTO: preferir SERVO_OUTPUT_RAW (lo que el autopiloto manda) para que siga waypoints.

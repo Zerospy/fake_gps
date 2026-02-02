@@ -23,6 +23,10 @@ THROTTLE_SERVO_CH = int(os.getenv("THROTTLE_SERVO_CH", "3"))
 LEFT_THROTTLE_SERVO_CH = int(os.getenv("LEFT_THROTTLE_SERVO_CH", "1"))
 RIGHT_THROTTLE_SERVO_CH = int(os.getenv("RIGHT_THROTTLE_SERVO_CH", "3"))
 
+REQUEST_STREAMS = os.getenv("REQUEST_STREAMS", "1").strip() in {"1", "true", "TRUE", "yes", "YES"}
+SERVO_OUTPUT_RAW_HZ = float(os.getenv("SERVO_OUTPUT_RAW_HZ", "10"))
+RC_CHANNELS_HZ = float(os.getenv("RC_CHANNELS_HZ", "10"))
+
 print(f"fake_gps: RX={in_conn}, TX={out_conn}, DRIVE_MODE={DRIVE_MODE}")
 if DRIVE_MODE == "steer":
     print(f"fake_gps: steer_ch=servo{STEER_SERVO_CH} throttle_ch=servo{THROTTLE_SERVO_CH}")
@@ -36,7 +40,34 @@ hb0 = in_mav.wait_heartbeat(timeout=10)
 if not hb0:
     print("WARN: no HEARTBEAT after 10s; continuing without mode info")
 
-    
+def request_message_interval(target_system: int, target_component: int, message_id: int, rate_hz: float) -> None:
+    # MAV_CMD_SET_MESSAGE_INTERVAL: param1=message id, param2=interval (us), -1 to stop.
+    if rate_hz <= 0:
+        interval_us = -1
+    else:
+        interval_us = int(1_000_000 / rate_hz)
+    out_mav.mav.command_long_send(
+        int(target_system),
+        int(target_component),
+        mavutil.mavlink.MAV_CMD_SET_MESSAGE_INTERVAL,
+        0,
+        float(message_id),
+        float(interval_us),
+        0, 0, 0, 0, 0,
+    )
+
+if REQUEST_STREAMS:
+    tgt_sys = hb0.get_srcSystem() if hb0 else (in_mav.target_system or 1)
+    tgt_comp = hb0.get_srcComponent() if hb0 else (in_mav.target_component or 1)
+    request_message_interval(tgt_sys, tgt_comp, mavutil.mavlink.MAVLINK_MSG_ID_SERVO_OUTPUT_RAW, SERVO_OUTPUT_RAW_HZ)
+    request_message_interval(tgt_sys, tgt_comp, mavutil.mavlink.MAVLINK_MSG_ID_RC_CHANNELS, RC_CHANNELS_HZ)
+    print(
+        "fake_gps: requested streams "
+        f"sys={tgt_sys} comp={tgt_comp} "
+        f"SERVO_OUTPUT_RAW={SERVO_OUTPUT_RAW_HZ}Hz RC_CHANNELS={RC_CHANNELS_HZ}Hz"
+    )
+
+
 # Posición inicial (Valparaíso aprox)
 lat = -33.03112
 lon = -71.62105

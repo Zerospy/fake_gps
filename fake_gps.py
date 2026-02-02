@@ -1,19 +1,29 @@
 from pymavlink import mavutil
+import os
 import time
 import math
 
 # RX: RC_CHANNELS (desde FC via rpanion/router)
-in_mav = mavutil.mavlink_connection('udpin:0.0.0.0:14560')
+IN_UDP_PORT = int(os.getenv("IN_UDP_PORT", "14560"))
+IN_MAVLINK = os.getenv("IN_MAVLINK")
+in_conn = IN_MAVLINK or f'udpin:0.0.0.0:{IN_UDP_PORT}'
+in_mav = mavutil.mavlink_connection(in_conn)
 
 # TX: hacia el bus MAVLink que llega al FC (si corres esto en la RPi, localhost ok)
-out_mav = mavutil.mavlink_connection('udpout:10.0.2.100:14550')
+OUT_UDP_HOST = os.getenv("OUT_UDP_HOST", "10.0.2.100")
+OUT_UDP_PORT = int(os.getenv("OUT_UDP_PORT", "14550"))
+OUT_MAVLINK = os.getenv("OUT_MAVLINK")
+out_conn = OUT_MAVLINK or f'udpout:{OUT_UDP_HOST}:{OUT_UDP_PORT}'
+out_mav = mavutil.mavlink_connection(out_conn)
 
-print("fake_gps: RX on 14560, TX to 14550")
+print(f"fake_gps: RX={in_conn}, TX={out_conn}")
 
 hb0 = in_mav.wait_heartbeat(timeout=10)
-if not hb0:
-    print("WARN: no HEARTBEAT on 14560 after 10s; continuing without mode info")
 
+if not hb0:
+    print("WARN: no HEARTBEAT after 10s; continuing without mode info")
+
+    
 # Posición inicial (Valparaíso aprox)
 lat = -33.03112
 lon = -71.62105
@@ -25,11 +35,19 @@ last_t = time.time()
 last_rc_time = None
 last_throttle = 1500
 last_yaw = 1500
+last_servo_time = None
+last_throttle_out = 1500
+last_yaw_out = 1500
 
 # Ajustes (tú los calibras)
 MAX_SPEED_MPS = 3.0        # velocidad máxima (m/s) con throttle al 2000
-MAX_TURN_RATE_DPS = 45.0   # giro máximo (deg/s) con yaw al 2000
+MAX_TURN_RATE_DPS = 45.0   # giro máximo (deg/s) con yaw al 2000  
 RC_STALE_S = 1.0           # si no hay RC reciente, usa neutral
+SERVO_STALE_S = 0.5        # si no hay SERVO_OUTPUT reciente, cae a RC
+
+# Rover/USV típico: servo1 = steering, servo3 = throttle
+STEER_SERVO_CH = 1
+THROTTLE_SERVO_CH = 3
 
 R_EARTH = 6378137.0  # m
 
@@ -39,6 +57,19 @@ def clamp(x, a, b):
 
 current_mode = None
 
+GPS_EPOCH_UNIX_S = 315964800  # 1980-01-06
+GPS_WEEK_S = 7 * 24 * 60 * 60
+# GPS-UTC offset. Since 2017-01-01 it's 18s; if this changes, update this constant.
+GPS_UTC_LEAP_S = 18
+
+def unix_to_gps_week_and_ms(unix_s: float) -> tuple[int, int]:
+    gps_s = unix_s - GPS_EPOCH_UNIX_S + GPS_UTC_LEAP_S
+    if gps_s < 0:
+        gps_s = 0
+    week = int(gps_s // GPS_WEEK_S)
+    week_ms = int((gps_s - (week * GPS_WEEK_S)) * 1000.0)
+    return week, week_ms
+
 
 while True:
     now = time.time()
@@ -47,32 +78,62 @@ while True:
     if dt <= 0:
         dt = 0.02
         
-    hb = in_mav.recv_match(type='HEARTBEAT', blocking=False)
-    if hb:
-        current_mode = mavutil.mode_string_v10(hb)
+    # Lee y procesa varios mensajes por tick para no "perder" streams por orden de llegada.
+    for _ in range(20):
+        m = in_mav.recv_match(blocking=False)
+        if not m:
+            break
+        mtype = m.get_type()
+        if mtype == 'HEARTBEAT':
+            current_mode = mavutil.mode_string_v10(m)
+        elif mtype == 'RC_CHANNELS':
+            last_throttle = m.chan3_raw  # 1000-2000 típico
+            last_yaw = m.chan4_raw       # 1000-2000 típico
+            last_rc_time = now
+        elif mtype == 'SERVO_OUTPUT_RAW':
+            # Usa los outputs del autopiloto para que en GUIDED/AUTO el "fake GPS" reaccione a waypoints.
+            steer = getattr(m, f'servo{STEER_SERVO_CH}_raw', None)
+            thr = getattr(m, f'servo{THROTTLE_SERVO_CH}_raw', None)
+            if steer is not None:
+                last_yaw_out = int(steer)
+            if thr is not None:
+                last_throttle_out = int(thr)
+            last_servo_time = now
 
-    msg = in_mav.recv_match(type='RC_CHANNELS', blocking=False)
-    if msg:
-        last_throttle = msg.chan3_raw  # 1000-2000 típico
-        last_yaw = msg.chan4_raw       # 1000-2000 típico
-        last_rc_time = now
+    # Selecciona la "entrada" para integrar el movimiento:
+    # - En GUIDED/AUTO: preferir SERVO_OUTPUT_RAW (lo que el autopiloto manda) para que siga waypoints.
+    # - En MANUAL/otros: usar RC.
+    use_servo = (
+        current_mode in {"GUIDED", "AUTO"}
+        and last_servo_time
+        and (now - last_servo_time) <= SERVO_STALE_S
+    )
 
-    if not last_rc_time or (now - last_rc_time) > RC_STALE_S:
-        throttle = 1500
-        yaw = 1500
+    if use_servo:
+        throttle = last_throttle_out
+        yaw = last_yaw_out
     else:
-        throttle = last_throttle
-        yaw = last_yaw
+        if not last_rc_time or (now - last_rc_time) > RC_STALE_S:
+            throttle = 1500
+            yaw = 1500
+        else:
+            throttle = last_throttle
+            yaw = last_yaw
 
     # Normaliza [-1..+1]
     thr_n = clamp((throttle - 1500) / 500.0, -1.0, 1.0)
     yaw_n = clamp((yaw - 1500) / 500.0, -1.0, 1.0)
 
     # Velocidad y giro
-    if current_mode == "GUIDED":
-        speed_mps = 5.0   # ← VELOCIDAD REAL PARA GUIDED (m/s)
+    # En Rover/USV, forzar velocidad fija en GUIDED suele disparar "pos horiz variance" (EKF ve
+    # movimiento sin aceleración/IMU real). Mantén la velocidad ligada al throttle con deadband.
+    thr_deadband = 0.05
+    if abs(thr_n) < thr_deadband:
+        thr_n_eff = 0.0
     else:
-        speed_mps = thr_n * MAX_SPEED_MPS
+        thr_n_eff = thr_n
+
+    speed_mps = thr_n_eff * MAX_SPEED_MPS
 
     turn_rate_rps = math.radians(yaw_n * MAX_TURN_RATE_DPS)
 
@@ -110,18 +171,28 @@ while True:
     satellites_visible = 12
 
     # Yaw en cdeg [0..36000]
-    yaw_cdeg = int((math.degrees(heading_rad) * 100.0)) % 36000
+    # 65535 = unknown; avoids the FC trying to use GPS-provided yaw/heading.
+    yaw_cdeg = 65535
 
     # Si quieres, puedes ignorar campos que no te importen con flags.
     # Aquí mandamos todo coherente, así que 0.
-    ignore_flags = 0
+    # With fake GPS, avoid advertising unrealistically good accuracy/HDOP.
+    ignore_flags = (
+        mavutil.mavlink.GPS_INPUT_IGNORE_FLAG_HDOP
+        | mavutil.mavlink.GPS_INPUT_IGNORE_FLAG_VDOP
+        | mavutil.mavlink.GPS_INPUT_IGNORE_FLAG_SPEED_ACCURACY
+        | mavutil.mavlink.GPS_INPUT_IGNORE_FLAG_HORIZONTAL_ACCURACY
+        | mavutil.mavlink.GPS_INPUT_IGNORE_FLAG_VERTICAL_ACCURACY
+    )
+
+    time_week, time_week_ms = unix_to_gps_week_and_ms(now)
 
     out_mav.mav.gps_input_send(
         time_usec,
         gps_id,
         ignore_flags,
-        0,  # time_week_ms (opcional)
-        0,  # time_week (opcional)
+        int(time_week_ms),
+        int(time_week),
         fix_type,
         lat_e7,
         lon_e7,

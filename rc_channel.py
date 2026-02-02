@@ -19,6 +19,8 @@ last_type = None
 last_rc = None
 last_servo = None
 current_mode = None
+armed = None
+last_statustext = None
 while True:
     msg = m.recv_match(blocking=True)
     if not msg:
@@ -31,6 +33,16 @@ while True:
             current_mode = mavutil.mode_string_v10(msg)
         except Exception:
             current_mode = None
+        try:
+            armed = bool(msg.base_mode & mavutil.mavlink.MAV_MODE_FLAG_SAFETY_ARMED)
+        except Exception:
+            armed = None
+    elif t == 'STATUSTEXT':
+        try:
+            last_statustext = msg.text
+            print(f"STATUSTEXT: {msg.text}")
+        except Exception:
+            pass
     elif t == 'RC_CHANNELS':
         last_rc = (msg.chan1_raw, msg.chan3_raw)
         print(f"RC: steer(ch1)={msg.chan1_raw} thr(ch3)={msg.chan3_raw}")
@@ -50,5 +62,7 @@ while True:
         rc_s = f"rc={last_rc}" if last_rc else "rc=None"
         servo_s = f"servo={last_servo}" if last_servo else "servo=None"
         mode_s = f"mode={current_mode}" if current_mode else "mode=?"
-        print(f"STATS: msgs={msg_count} last={last_type} {mode_s} {rc_s} {servo_s}")
+        armed_s = "armed=?" if armed is None else f"armed={int(armed)}"
+        text_s = f"text={last_statustext!r}" if last_statustext else "text=None"
+        print(f"STATS: msgs={msg_count} last={last_type} {mode_s} {armed_s} {rc_s} {servo_s} {text_s}")
         last_print = now

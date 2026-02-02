@@ -11,10 +11,17 @@ in_mav = mavutil.mavlink_connection(in_conn)
 
 # TX: hacia el bus MAVLink que llega al FC (si corres esto en la RPi, localhost ok)
 OUT_UDP_HOST = os.getenv("OUT_UDP_HOST", "10.0.2.100")
-OUT_UDP_PORT = int(os.getenv("OUT_UDP_PORT", "14551"))
+OUT_UDP_PORT = int(os.getenv("OUT_UDP_PORT", "14550"))
 OUT_MAVLINK = os.getenv("OUT_MAVLINK")
 out_conn = OUT_MAVLINK or f'udpout:{OUT_UDP_HOST}:{OUT_UDP_PORT}'
 out_mav = mavutil.mavlink_connection(out_conn)
+
+# Rover/USV: puede ser timón+hélice ("steer") o empuje diferencial ("diff").
+DRIVE_MODE = os.getenv("DRIVE_MODE", "steer").strip().lower()  # steer|diff
+STEER_SERVO_CH = int(os.getenv("STEER_SERVO_CH", "1"))
+THROTTLE_SERVO_CH = int(os.getenv("THROTTLE_SERVO_CH", "3"))
+LEFT_THROTTLE_SERVO_CH = int(os.getenv("LEFT_THROTTLE_SERVO_CH", "1"))
+RIGHT_THROTTLE_SERVO_CH = int(os.getenv("RIGHT_THROTTLE_SERVO_CH", "3"))
 
 print(f"fake_gps: RX={in_conn}, TX={out_conn}, DRIVE_MODE={DRIVE_MODE}")
 if DRIVE_MODE == "steer":
@@ -52,13 +59,6 @@ MAX_SPEED_MPS = 3.0        # velocidad máxima (m/s) con throttle al 2000
 MAX_TURN_RATE_DPS = 45.0   # giro máximo (deg/s) con yaw al 2000  
 RC_STALE_S = 1.0           # si no hay RC reciente, usa neutral
 SERVO_STALE_S = 0.5        # si no hay SERVO_OUTPUT reciente, cae a RC
-
-# Rover/USV: puede ser timón+hélice ("steer") o empuje diferencial ("diff").
-DRIVE_MODE = os.getenv("DRIVE_MODE", "steer").strip().lower()  # steer|diff
-STEER_SERVO_CH = int(os.getenv("STEER_SERVO_CH", "1"))
-THROTTLE_SERVO_CH = int(os.getenv("THROTTLE_SERVO_CH", "3"))
-LEFT_THROTTLE_SERVO_CH = int(os.getenv("LEFT_THROTTLE_SERVO_CH", "1"))
-RIGHT_THROTTLE_SERVO_CH = int(os.getenv("RIGHT_THROTTLE_SERVO_CH", "3"))
 
 R_EARTH = 6378137.0  # m
 

@@ -75,6 +75,7 @@ alt = 10.0
 
 # Estado
 heading_rad = 0.0  # rad
+speed_mps = 0.0
 last_t = time.time()
 last_rc_time = None
 last_throttle = 1500
@@ -95,6 +96,11 @@ R_EARTH = 6378137.0  # m
 
 SEND_GPS_YAW = os.getenv("SEND_GPS_YAW", "0").strip() in {"1", "true", "TRUE", "yes", "YES"}
 TURN_RATE_SCALES_WITH_SPEED = os.getenv("TURN_RATE_SCALES_WITH_SPEED", "1").strip() in {"1", "true", "TRUE", "yes", "YES"}
+SPEED_TAU_S = float(os.getenv("SPEED_TAU_S", "1.5"))  # respuesta del barco al throttle
+RUDDER_MAX_DEG = float(os.getenv("RUDDER_MAX_DEG", "30"))  # solo DRIVE_MODE=steer
+TURN_LENGTH_M = float(os.getenv("TURN_LENGTH_M", "1.5"))   # "distancia entre ejes" equivalente (modelo bicicleta)
+YAW_RATE_LIMIT_DPS = float(os.getenv("YAW_RATE_LIMIT_DPS", str(MAX_TURN_RATE_DPS)))
+THR_DEADBAND = float(os.getenv("THR_DEADBAND", "0.05"))
 
 def clamp(x, a, b):
     return max(a, min(b, x))
@@ -194,29 +200,41 @@ while True:
             throttle = last_throttle
             yaw = last_yaw
 
-    # Normaliza [-1..+1]
+    # Normaliza PWM a [-1..+1]
     thr_n = clamp((throttle - 1500) / 500.0, -1.0, 1.0)
-    yaw_n = clamp((yaw - 1500) / 500.0, -1.0, 1.0)
+    steer_n = clamp((yaw - 1500) / 500.0, -1.0, 1.0)
 
-    # Velocidad y giro
-    # En Rover/USV, forzar velocidad fija en GUIDED suele disparar "pos horiz variance" (EKF ve
-    # movimiento sin aceleración/IMU real). Mantén la velocidad ligada al throttle con deadband.
-    thr_deadband = 0.05
-    if abs(thr_n) < thr_deadband:
+    # 1) Dinámica longitudinal (velocidad): filtro 1er orden hacia la velocidad objetivo
+    if abs(thr_n) < THR_DEADBAND:
         thr_n_eff = 0.0
     else:
         thr_n_eff = thr_n
 
-    speed_mps = thr_n_eff * MAX_SPEED_MPS
+    speed_cmd_mps = thr_n_eff * MAX_SPEED_MPS
+    if SPEED_TAU_S <= 1e-3:
+        speed_mps = speed_cmd_mps
+    else:
+        speed_mps += (speed_cmd_mps - speed_mps) * (dt / SPEED_TAU_S)
 
-    # Para Rover/USV el "steering" no es una tasa de giro directa; depende de la velocidad.
-    # Si no escalas con velocidad, el modelo tiende a girar demasiado y puede terminar en círculos.
+    # 2) Dinámica de giro (yaw rate)
     if TURN_RATE_SCALES_WITH_SPEED and MAX_SPEED_MPS > 1e-6:
         speed_scale = min(1.0, abs(speed_mps) / MAX_SPEED_MPS)
     else:
         speed_scale = 1.0
 
-    turn_rate_rps = math.radians(yaw_n * MAX_TURN_RATE_DPS) * speed_scale
+    if DRIVE_MODE == "steer":
+        # Modelo bicicleta: yaw_rate = v/L * tan(delta)
+        delta_rad = math.radians(RUDDER_MAX_DEG) * steer_n
+        if abs(TURN_LENGTH_M) < 1e-3:
+            yaw_rate_rps = 0.0
+        else:
+            yaw_rate_rps = (speed_mps / TURN_LENGTH_M) * math.tan(delta_rad)
+        yaw_rate_rps = clamp(yaw_rate_rps, -math.radians(YAW_RATE_LIMIT_DPS), math.radians(YAW_RATE_LIMIT_DPS))
+    else:
+        # Empuje diferencial: el comando de giro viene de (right-left). Permite algo de giro a baja velocidad.
+        yaw_rate_rps = math.radians(steer_n * MAX_TURN_RATE_DPS) * (0.2 + 0.8 * speed_scale)
+
+    turn_rate_rps = yaw_rate_rps
 
     # Actualiza heading
     heading_rad = (heading_rad + turn_rate_rps * dt) % (2 * math.pi)

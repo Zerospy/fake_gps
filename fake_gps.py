@@ -11,7 +11,7 @@ in_mav = mavutil.mavlink_connection(in_conn)
 
 # TX: hacia el bus MAVLink que llega al FC (si corres esto en la RPi, localhost ok)
 OUT_UDP_HOST = os.getenv("OUT_UDP_HOST", "10.0.2.100")
-OUT_UDP_PORT = int(os.getenv("OUT_UDP_PORT", "14550"))
+OUT_UDP_PORT = int(os.getenv("OUT_UDP_PORT", "14551"))
 OUT_MAVLINK = os.getenv("OUT_MAVLINK")
 out_conn = OUT_MAVLINK or f'udpout:{OUT_UDP_HOST}:{OUT_UDP_PORT}'
 out_mav = mavutil.mavlink_connection(out_conn)

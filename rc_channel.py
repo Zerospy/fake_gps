@@ -18,6 +18,7 @@ msg_count = 0
 last_type = None
 last_rc = None
 last_servo = None
+current_mode = None
 while True:
     msg = m.recv_match(blocking=True)
     if not msg:
@@ -25,16 +26,29 @@ while True:
     msg_count += 1
     last_type = msg.get_type()
     t = msg.get_type()
-    if t == 'RC_CHANNELS':
+    if t == 'HEARTBEAT':
+        try:
+            current_mode = mavutil.mode_string_v10(msg)
+        except Exception:
+            current_mode = None
+    elif t == 'RC_CHANNELS':
         last_rc = (msg.chan1_raw, msg.chan3_raw)
         print(f"RC: steer(ch1)={msg.chan1_raw} thr(ch3)={msg.chan3_raw}")
     elif t == 'SERVO_OUTPUT_RAW':
-        last_servo = (msg.servo1_raw, msg.servo2_raw, msg.servo3_raw, msg.servo4_raw)
-        print(f"SERVO: s1={msg.servo1_raw} s2={msg.servo2_raw} s3={msg.servo3_raw} s4={msg.servo4_raw}")
+        last_servo = (
+            msg.servo1_raw, msg.servo2_raw, msg.servo3_raw, msg.servo4_raw,
+            msg.servo5_raw, msg.servo6_raw, msg.servo7_raw, msg.servo8_raw,
+        )
+        print(
+            "SERVO: "
+            f"s1={msg.servo1_raw} s2={msg.servo2_raw} s3={msg.servo3_raw} s4={msg.servo4_raw} "
+            f"s5={msg.servo5_raw} s6={msg.servo6_raw} s7={msg.servo7_raw} s8={msg.servo8_raw}"
+        )
 
     now = time.time()
     if now - last_print >= 2.0:
         rc_s = f"rc={last_rc}" if last_rc else "rc=None"
         servo_s = f"servo={last_servo}" if last_servo else "servo=None"
-        print(f"STATS: msgs={msg_count} last={last_type} {rc_s} {servo_s}")
+        mode_s = f"mode={current_mode}" if current_mode else "mode=?"
+        print(f"STATS: msgs={msg_count} last={last_type} {mode_s} {rc_s} {servo_s}")
         last_print = now

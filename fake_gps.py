@@ -16,7 +16,13 @@ OUT_MAVLINK = os.getenv("OUT_MAVLINK")
 out_conn = OUT_MAVLINK or f'udpout:{OUT_UDP_HOST}:{OUT_UDP_PORT}'
 out_mav = mavutil.mavlink_connection(out_conn)
 
-print(f"fake_gps: RX={in_conn}, TX={out_conn}")
+print(f"fake_gps: RX={in_conn}, TX={out_conn}, DRIVE_MODE={DRIVE_MODE}")
+if DRIVE_MODE == "steer":
+    print(f"fake_gps: steer_ch=servo{STEER_SERVO_CH} throttle_ch=servo{THROTTLE_SERVO_CH}")
+elif DRIVE_MODE == "diff":
+    print(f"fake_gps: left_throttle_ch=servo{LEFT_THROTTLE_SERVO_CH} right_throttle_ch=servo{RIGHT_THROTTLE_SERVO_CH}")
+else:
+    print("WARN: unknown DRIVE_MODE; expected 'steer' or 'diff'")
 
 hb0 = in_mav.wait_heartbeat(timeout=10)
 
@@ -38,6 +44,8 @@ last_yaw = 1500
 last_servo_time = None
 last_throttle_out = 1500
 last_yaw_out = 1500
+last_left_out = 1500
+last_right_out = 1500
 
 # Ajustes (tú los calibras)
 MAX_SPEED_MPS = 3.0        # velocidad máxima (m/s) con throttle al 2000
@@ -45,11 +53,17 @@ MAX_TURN_RATE_DPS = 45.0   # giro máximo (deg/s) con yaw al 2000
 RC_STALE_S = 1.0           # si no hay RC reciente, usa neutral
 SERVO_STALE_S = 0.5        # si no hay SERVO_OUTPUT reciente, cae a RC
 
-# Rover/USV típico: servo1 = steering, servo3 = throttle
-STEER_SERVO_CH = 1
-THROTTLE_SERVO_CH = 3
+# Rover/USV: puede ser timón+hélice ("steer") o empuje diferencial ("diff").
+DRIVE_MODE = os.getenv("DRIVE_MODE", "steer").strip().lower()  # steer|diff
+STEER_SERVO_CH = int(os.getenv("STEER_SERVO_CH", "1"))
+THROTTLE_SERVO_CH = int(os.getenv("THROTTLE_SERVO_CH", "3"))
+LEFT_THROTTLE_SERVO_CH = int(os.getenv("LEFT_THROTTLE_SERVO_CH", "1"))
+RIGHT_THROTTLE_SERVO_CH = int(os.getenv("RIGHT_THROTTLE_SERVO_CH", "3"))
 
 R_EARTH = 6378137.0  # m
+
+SEND_GPS_YAW = os.getenv("SEND_GPS_YAW", "0").strip() in {"1", "true", "TRUE", "yes", "YES"}
+TURN_RATE_SCALES_WITH_SPEED = os.getenv("TURN_RATE_SCALES_WITH_SPEED", "1").strip() in {"1", "true", "TRUE", "yes", "YES"}
 
 def clamp(x, a, b):
     return max(a, min(b, x))
@@ -92,12 +106,20 @@ while True:
             last_rc_time = now
         elif mtype == 'SERVO_OUTPUT_RAW':
             # Usa los outputs del autopiloto para que en GUIDED/AUTO el "fake GPS" reaccione a waypoints.
-            steer = getattr(m, f'servo{STEER_SERVO_CH}_raw', None)
-            thr = getattr(m, f'servo{THROTTLE_SERVO_CH}_raw', None)
-            if steer is not None:
-                last_yaw_out = int(steer)
-            if thr is not None:
-                last_throttle_out = int(thr)
+            if DRIVE_MODE == "diff":
+                left = getattr(m, f'servo{LEFT_THROTTLE_SERVO_CH}_raw', None)
+                right = getattr(m, f'servo{RIGHT_THROTTLE_SERVO_CH}_raw', None)
+                if left is not None:
+                    last_left_out = int(left)
+                if right is not None:
+                    last_right_out = int(right)
+            else:
+                steer = getattr(m, f'servo{STEER_SERVO_CH}_raw', None)
+                thr = getattr(m, f'servo{THROTTLE_SERVO_CH}_raw', None)
+                if steer is not None:
+                    last_yaw_out = int(steer)
+                if thr is not None:
+                    last_throttle_out = int(thr)
             last_servo_time = now
 
     # Selecciona la "entrada" para integrar el movimiento:
@@ -110,8 +132,13 @@ while True:
     )
 
     if use_servo:
-        throttle = last_throttle_out
-        yaw = last_yaw_out
+        if DRIVE_MODE == "diff":
+            throttle = int((last_left_out + last_right_out) / 2)
+            # Yaw command from differential thrust (right-left); maps to [-1..+1] around neutral.
+            yaw = int(1500 + (last_right_out - last_left_out) / 2)
+        else:
+            throttle = last_throttle_out
+            yaw = last_yaw_out
     else:
         if not last_rc_time or (now - last_rc_time) > RC_STALE_S:
             throttle = 1500
@@ -135,7 +162,14 @@ while True:
 
     speed_mps = thr_n_eff * MAX_SPEED_MPS
 
-    turn_rate_rps = math.radians(yaw_n * MAX_TURN_RATE_DPS)
+    # Para Rover/USV el "steering" no es una tasa de giro directa; depende de la velocidad.
+    # Si no escalas con velocidad, el modelo tiende a girar demasiado y puede terminar en círculos.
+    if TURN_RATE_SCALES_WITH_SPEED and MAX_SPEED_MPS > 1e-6:
+        speed_scale = min(1.0, abs(speed_mps) / MAX_SPEED_MPS)
+    else:
+        speed_scale = 1.0
+
+    turn_rate_rps = math.radians(yaw_n * MAX_TURN_RATE_DPS) * speed_scale
 
     # Actualiza heading
     heading_rad = (heading_rad + turn_rate_rps * dt) % (2 * math.pi)
@@ -170,9 +204,13 @@ while True:
 
     satellites_visible = 12
 
-    # Yaw en cdeg [0..36000]
-    # 65535 = unknown; avoids the FC trying to use GPS-provided yaw/heading.
-    yaw_cdeg = 65535
+    # Yaw en cdeg [0..36000]. En banco, el compás/IMU no cambia de yaw, así que GUIDED puede quedarse
+    # "tratando de girar" para siempre. Si quieres que el Rover use el yaw del GPS, activa SEND_GPS_YAW=1
+    # y configura el FC para aceptar yaw externo.
+    if SEND_GPS_YAW:
+        yaw_cdeg = int((math.degrees(heading_rad) * 100.0)) % 36000
+    else:
+        yaw_cdeg = 65535
 
     # Si quieres, puedes ignorar campos que no te importen con flags.
     # Aquí mandamos todo coherente, así que 0.

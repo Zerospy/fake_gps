@@ -143,7 +143,7 @@ while True:
         elif mtype == 'RC_CHANNELS':
             # Algunos links/streams pueden entregar 0 en chan*_raw; trata 0 como "sin dato".
             thr = getattr(m, "chan3_raw", 0)
-            yaw = getattr(m, "chan4_raw", 0)
+            yaw = getattr(m, "chan1_raw", 0)
             if PWM_MIN_VALID <= int(thr) <= PWM_MAX_VALID and PWM_MIN_VALID <= int(yaw) <= PWM_MAX_VALID:
                 last_throttle = int(thr)  # 1000-2000 típico
                 last_yaw = int(yaw)       # 1000-2000 típico

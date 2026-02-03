@@ -18,6 +18,7 @@ msg_count = 0
 last_type = None
 last_rc = None
 last_servo = None
+last_servo_port = None
 current_mode = None
 armed = None
 last_statustext = None
@@ -53,12 +54,17 @@ while True:
         last_rc = (msg.chan1_raw, msg.chan3_raw)
         print(f"RC: steer(ch1)={msg.chan1_raw} thr(ch3)={msg.chan3_raw}")
     elif t == 'SERVO_OUTPUT_RAW':
+        try:
+            last_servo_port = int(getattr(msg, "port", 0))
+        except Exception:
+            last_servo_port = None
         last_servo = (
             msg.servo1_raw, msg.servo2_raw, msg.servo3_raw, msg.servo4_raw,
             msg.servo5_raw, msg.servo6_raw, msg.servo7_raw, msg.servo8_raw,
         )
+        port_s = f" port={last_servo_port}" if last_servo_port is not None else ""
         print(
-            "SERVO: "
+            f"SERVO:{port_s} "
             f"s1={msg.servo1_raw} s2={msg.servo2_raw} s3={msg.servo3_raw} s4={msg.servo4_raw} "
             f"s5={msg.servo5_raw} s6={msg.servo6_raw} s7={msg.servo7_raw} s8={msg.servo8_raw}"
         )
@@ -73,9 +79,10 @@ while True:
     if now - last_print >= 2.0:
         rc_s = f"rc={last_rc}" if last_rc else "rc=None"
         servo_s = f"servo={last_servo}" if last_servo else "servo=None"
+        servo_port_s = f"servo_port={last_servo_port}" if last_servo_port is not None else "servo_port=?"
         mode_s = f"mode={current_mode}" if current_mode else "mode=?"
         armed_s = "armed=?" if armed is None else f"armed={int(armed)}"
         text_s = f"text={last_statustext!r}" if last_statustext else "text=None"
         src_s = f"src={last_src}" if last_src else "src=?"
-        print(f"STATS: msgs={msg_count} last={last_type} {src_s} {mode_s} {armed_s} {rc_s} {servo_s} {text_s}")
+        print(f"STATS: msgs={msg_count} last={last_type} {src_s} {mode_s} {armed_s} {rc_s} {servo_port_s} {servo_s} {text_s}")
         last_print = now

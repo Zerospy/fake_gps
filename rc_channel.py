@@ -24,6 +24,10 @@ armed = None
 last_statustext = None
 last_src = None
 PRINT_UNKNOWN = os.getenv("PRINT_UNKNOWN", "0").strip() in {"1", "true", "TRUE", "yes", "YES"}
+last_vfr_throttle = None
+last_vfr_groundspeed = None
+last_guided_target = None
+last_warn = 0.0
 while True:
     msg = m.recv_match(blocking=True)
     if not msg:
@@ -74,6 +78,30 @@ while True:
             print(f"MSG: {t} src={last_src} {msg.to_dict()}")
         except Exception:
             print(f"MSG: {t} src={last_src}")
+
+        # Common root-cause hint for Rover: GUIDED target exists but speed/throttle stays at 0.
+        if t == "VFR_HUD":
+            try:
+                last_vfr_throttle = msg.throttle
+                last_vfr_groundspeed = msg.groundspeed
+            except Exception:
+                pass
+        elif t == "POSITION_TARGET_GLOBAL_INT":
+            try:
+                last_guided_target = (msg.lat_int, msg.lon_int, msg.alt)
+                now = time.time()
+                if (
+                    now - last_warn > 5.0
+                    and current_mode == "GUIDED"
+                    and armed is True
+                    and float(getattr(msg, "vx", 0.0)) == 0.0
+                    and float(getattr(msg, "vy", 0.0)) == 0.0
+                    and (last_vfr_throttle == 0 or last_vfr_throttle is None)
+                ):
+                    print("HINT: GUIDED target llega, pero la velocidad/THR parece 0. En Mission Planner fija una velocidad GUIDED (Set Speed) o revisa CRUISE_SPEED/CRUISE_THROTTLE y failsafes.")
+                    last_warn = now
+            except Exception:
+                pass
 
     now = time.time()
     if now - last_print >= 2.0:

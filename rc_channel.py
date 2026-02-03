@@ -21,12 +21,18 @@ last_servo = None
 current_mode = None
 armed = None
 last_statustext = None
+last_src = None
+PRINT_UNKNOWN = os.getenv("PRINT_UNKNOWN", "0").strip() in {"1", "true", "TRUE", "yes", "YES"}
 while True:
     msg = m.recv_match(blocking=True)
     if not msg:
         continue
     msg_count += 1
     last_type = msg.get_type()
+    try:
+        last_src = (msg.get_srcSystem(), msg.get_srcComponent())
+    except Exception:
+        last_src = None
     t = msg.get_type()
     if t == 'HEARTBEAT':
         try:
@@ -56,6 +62,12 @@ while True:
             f"s1={msg.servo1_raw} s2={msg.servo2_raw} s3={msg.servo3_raw} s4={msg.servo4_raw} "
             f"s5={msg.servo5_raw} s6={msg.servo6_raw} s7={msg.servo7_raw} s8={msg.servo8_raw}"
         )
+    elif PRINT_UNKNOWN:
+        # Dump any other message types for debugging MAVLink routing/stream rates.
+        try:
+            print(f"MSG: {t} src={last_src} {msg.to_dict()}")
+        except Exception:
+            print(f"MSG: {t} src={last_src}")
 
     now = time.time()
     if now - last_print >= 2.0:
@@ -64,5 +76,6 @@ while True:
         mode_s = f"mode={current_mode}" if current_mode else "mode=?"
         armed_s = "armed=?" if armed is None else f"armed={int(armed)}"
         text_s = f"text={last_statustext!r}" if last_statustext else "text=None"
-        print(f"STATS: msgs={msg_count} last={last_type} {mode_s} {armed_s} {rc_s} {servo_s} {text_s}")
+        src_s = f"src={last_src}" if last_src else "src=?"
+        print(f"STATS: msgs={msg_count} last={last_type} {src_s} {mode_s} {armed_s} {rc_s} {servo_s} {text_s}")
         last_print = now

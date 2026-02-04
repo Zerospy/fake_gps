@@ -11,7 +11,7 @@ in_mav = mavutil.mavlink_connection(in_conn)
 
 # TX: hacia el bus MAVLink que llega al FC (si corres esto en la RPi, localhost ok)
 OUT_UDP_HOST = os.getenv("OUT_UDP_HOST", "10.0.2.100")
-OUT_UDP_PORT = int(os.getenv("OUT_UDP_PORT", "14551"))
+OUT_UDP_PORT = int(os.getenv("OUT_UDP_PORT", "14550"))
 OUT_MAVLINK = os.getenv("OUT_MAVLINK")
 out_conn = OUT_MAVLINK or f'udpout:{OUT_UDP_HOST}:{OUT_UDP_PORT}'
 out_mav = mavutil.mavlink_connection(out_conn)
@@ -22,6 +22,8 @@ STEER_SERVO_CH = int(os.getenv("STEER_SERVO_CH", "1"))
 THROTTLE_SERVO_CH = int(os.getenv("THROTTLE_SERVO_CH", "3"))
 LEFT_THROTTLE_SERVO_CH = int(os.getenv("LEFT_THROTTLE_SERVO_CH", "1"))
 RIGHT_THROTTLE_SERVO_CH = int(os.getenv("RIGHT_THROTTLE_SERVO_CH", "3"))
+RC_STEER_CH = int(os.getenv("RC_STEER_CH", "1"))       # canal RC (joystick) para timón
+RC_THROTTLE_CH = int(os.getenv("RC_THROTTLE_CH", "3")) # canal RC (joystick) para acelerador
 
 REQUEST_STREAMS = os.getenv("REQUEST_STREAMS", "1").strip() in {"1", "true", "TRUE", "yes", "YES"}
 SERVO_OUTPUT_RAW_HZ = float(os.getenv("SERVO_OUTPUT_RAW_HZ", "10"))
@@ -30,6 +32,7 @@ RC_CHANNELS_HZ = float(os.getenv("RC_CHANNELS_HZ", "10"))
 print(f"fake_gps: RX={in_conn}, TX={out_conn}, DRIVE_MODE={DRIVE_MODE}")
 if DRIVE_MODE == "steer":
     print(f"fake_gps: steer_ch=servo{STEER_SERVO_CH} throttle_ch=servo{THROTTLE_SERVO_CH}")
+    print(f"fake_gps: rc_steer_ch={RC_STEER_CH} rc_throttle_ch={RC_THROTTLE_CH}")
 elif DRIVE_MODE == "diff":
     print(f"fake_gps: left_throttle_ch=servo{LEFT_THROTTLE_SERVO_CH} right_throttle_ch=servo{RIGHT_THROTTLE_SERVO_CH}")
 else:
@@ -124,6 +127,11 @@ def unix_to_gps_week_and_ms(unix_s: float) -> tuple[int, int]:
     week_ms = int((gps_s - (week * GPS_WEEK_S)) * 1000.0)
     return week, week_ms
 
+def rc_scaled_to_pwm(scaled: int) -> int:
+    # RC_CHANNELS_SCALED uses approx [-10000..10000] for [-1..1]. Convert to PWM 1000..2000 around 1500.
+    s = int(clamp(int(scaled), -10000, 10000))
+    return int(1500 + (s / 10000.0) * 500.0)
+
 
 while True:
     now = time.time()
@@ -141,13 +149,27 @@ while True:
         if mtype == 'HEARTBEAT':
             current_mode = mavutil.mode_string_v10(m)
         elif mtype == 'RC_CHANNELS':
-            # Algunos links/streams pueden entregar 0 en chan*_raw; trata 0 como "sin dato".
-            thr = getattr(m, "chan3_raw", 0)
-            yaw = getattr(m, "chan1_raw", 0)
-            if PWM_MIN_VALID <= int(thr) <= PWM_MAX_VALID and PWM_MIN_VALID <= int(yaw) <= PWM_MAX_VALID:
+            # Rover típico: steering en CH1 y throttle en CH3 (configurable).
+            thr = getattr(m, f"chan{RC_THROTTLE_CH}_raw", 0)
+            steer = getattr(m, f"chan{RC_STEER_CH}_raw", 0)
+            if PWM_MIN_VALID <= int(thr) <= PWM_MAX_VALID and PWM_MIN_VALID <= int(steer) <= PWM_MAX_VALID:
                 last_throttle = int(thr)  # 1000-2000 típico
-                last_yaw = int(yaw)       # 1000-2000 típico
+                last_yaw = int(steer)     # reutilizamos variable yaw como "steer"
                 last_rc_time = now
+        elif mtype == 'RC_CHANNELS_RAW':
+            thr = getattr(m, f"chan{RC_THROTTLE_CH}_raw", 0)
+            steer = getattr(m, f"chan{RC_STEER_CH}_raw", 0)
+            if PWM_MIN_VALID <= int(thr) <= PWM_MAX_VALID and PWM_MIN_VALID <= int(steer) <= PWM_MAX_VALID:
+                last_throttle = int(thr)
+                last_yaw = int(steer)
+                last_rc_time = now
+        elif mtype == 'RC_CHANNELS_SCALED':
+            # Algunos setups solo emiten RC_CHANNELS_SCALED (valores -10000..10000).
+            thr_s = getattr(m, f"chan{RC_THROTTLE_CH}_scaled", 0)
+            steer_s = getattr(m, f"chan{RC_STEER_CH}_scaled", 0)
+            last_throttle = rc_scaled_to_pwm(int(thr_s))
+            last_yaw = rc_scaled_to_pwm(int(steer_s))
+            last_rc_time = now
         elif mtype == 'SERVO_OUTPUT_RAW':
             # Usa los outputs del autopiloto para que en GUIDED/AUTO el "fake GPS" reaccione a waypoints.
             if DRIVE_MODE == "diff":
